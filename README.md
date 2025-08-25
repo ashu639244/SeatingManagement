@@ -45,16 +45,7 @@ Design Python code to generate attendance sheet for each exam.
 
 ---
 
-## Deadlines
-- **Group info submission:** 06/10/2024
-- **Progress check:** 23/10/2024 (in lab)
-- **Final check:** 13/11/2024
-
----
-
 ## Important Notes
 - Inputs are **CSV files with `;` as separator**.
 - Optimize seating allocation for room usage and locality.
-- Plagiarism check will be applied. Identical submissions will get **zero marks**.
-- This project carries significant grading weightage.
 
