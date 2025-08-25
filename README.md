@@ -42,8 +42,6 @@ Design Python code to generate attendance sheet for each exam.
 
 ## File References
 - [Input File (Google Sheets)](https://docs.google.com/spreadsheets/d/1yt3eDmftPLrKo5REC23qLISc4xNTTrmN6i5dIszEkvg/edit?usp=sharing)
-- Group information submission: [Form Link](https://forms.gle/PcCGLEuB9aNj1Hec6)  
-- Existing group names: [Selected Names](https://docs.google.com/spreadsheets/d/17O7xz15NPxlZvRtzGS51rpdyuiD0oei5sNFfwkkfKOI/edit?usp=sharing)
 
 ---
 
