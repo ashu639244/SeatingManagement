@@ -1,199 +1,191 @@
-#Project
-from datetime import datetime
-start_time = datetime.now()
-
-#Help
-def proj_chat_tool():
-	pass
-
-
-###Code
-
+import os
 import pandas as pd
-from collections import defaultdict, deque
-import sys
 from datetime import datetime
-import builtins  # Import builtins to use builtins.sum
 
-# Read ip_1.csv to create the course dictionary
-try:
-    df1 = pd.read_csv('ip_1.csv', skiprows=1)
-    df1.columns = ['rollno', 'register_sem', 'schedule_sem', 'course_code']
-    course_dict = df1.groupby('course_code')['rollno'].apply(list).to_dict()
-except FileNotFoundError:
-    print("Error: 'ip_1.csv' not found.")
-    sys.exit(1)
-except Exception as e:
-    print(f"Error reading 'ip_1.csv': {e}")
-    sys.exit(1)
+def load_data(ip1_file, ip2_file, ip3_file, ip4_file):
+    try:
+        ip1 = pd.read_csv(ip1_file, sep=',', header=1, on_bad_lines='skip')
+        ip2 = pd.read_csv(ip2_file, sep=',', header=1, on_bad_lines='skip')
+        ip3 = pd.read_csv(ip3_file, sep=',', header=0, on_bad_lines='skip')
+        ip4 = pd.read_csv(ip4_file, sep=',', header=0, on_bad_lines='skip')
 
-# Read ip_2.csv to extract course IDs
-try:
-    df2 = pd.read_csv('ip_2.csv', skiprows=1)
-    df2.columns = ['date', 'day', 'morning_courses', 'evening_courses']
-except FileNotFoundError:
-    print("Error: 'ip_2.csv' not found.")
-    sys.exit(1)
-except Exception as e:
-    print(f"Error reading 'ip_2.csv': {e}")
-    sys.exit(1)
+        # Strip whitespace from column names
+        ip1.columns = ip1.columns.str.strip()
+        ip2.columns = ip2.columns.str.strip()
+        ip3.columns = ip3.columns.str.strip()
+        ip4.columns = ip4.columns.str.strip()
 
-# Split and strip spaces from course IDs
-df2['morning_courses'] = df2['morning_courses'].astype(str).str.split(';').apply(
-    lambda x: [i.strip() for i in x] if isinstance(x, list) else [])
-df2['evening_courses'] = df2['evening_courses'].astype(str).str.split(';').apply(
-    lambda x: [i.strip() for i in x] if isinstance(x, list) else [])
+        # Convert the 'Date' column in ip2 to datetime
+        ip2['Date'] = pd.to_datetime(ip2['Date'], format='%d/%m/%Y', errors='coerce')
 
-# Read ip_3.csv to initialize room capacities
-try:
-    df3 = pd.read_csv('ip_3.csv', skiprows=1, header=None)
-    df3.columns = ['room_no', 'capacity', 'extra_info']
-except FileNotFoundError:
-    print("Error: 'ip_3.csv' not found.")
-    sys.exit(1)
-except Exception as e:
-    print(f"Error reading 'ip_3.csv': {e}")
-    sys.exit(1)
+        return ip1, ip2, ip3, ip4
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return None, None, None, None
 
-# Take buffer and dense inputs with validation
-try:
-    buffer_value = int(input("Enter buffer value: "))
-except ValueError:
-    print("Error: Buffer value must be an integer.")
-    sys.exit(1)
+def arrange_seating(ip1, ip2, ip3, date, session, original_room_capacities, buffer_size, arrangement_type):
+    # Select courses for the specified date and session
+    courses = ip2.loc[ip2['Date'] == date, session]
 
-try:
-    dense_input = input("Enter dense (1 for True, 0 for False): ")
-    if dense_input not in ['0', '1']:
-        raise ValueError
-    dense = bool(int(dense_input))
-except ValueError:
-    print("Error: Dense must be 1 (True) or 0 (False).")
-    sys.exit(1)
+    # Check if any courses are found
+    if courses.empty:
+        print(f"No courses found for date: {date} and session: {session}.")
+        return pd.DataFrame()  # Return an empty DataFrame
 
-# Adjust room capacities based on buffer
-room_dict = {row['room_no']: max(0, int(row['capacity']) - buffer_value) for _, row in df3.iterrows()}
+    courses = courses.values[0]
+    course_list = [course.strip() for course in courses.split(';')] if courses != 'NO EXAM' else []
 
-# Exclude rooms with zero capacity if dense is True
-if dense:
-    room_dict = {room: capacity for room, capacity in room_dict.items() if capacity > 0}
+    # Prepare output DataFrame
+    output = []
+    room_capacities = original_room_capacities.copy()  # Reset room capacities for this session
 
-# Sort rooms by capacity and handle "L" rooms at the end
-l_rooms = {room: capacity for room, capacity in room_dict.items() if room.startswith('L')}
-non_l_rooms = {room: capacity for room, capacity in room_dict.items() if not room.startswith('L')}
+    for course in course_list:
+        # Strip spaces from course code for accurate matching
+        course = course.strip()
 
-# Sort non-L rooms by descending capacity, then by room number
-sorted_non_l_rooms = sorted(non_l_rooms.items(), key=lambda x: (-x[1], x[0]))
-# Sort L rooms alphabetically
-sorted_l_rooms = sorted(l_rooms.items(), key=lambda x: x[0])
-sorted_room_dict = dict(sorted_non_l_rooms + sorted_l_rooms)
+        # Get students enrolled in the course
+        enrolled_students = ip1[ip1['course_code'].str.strip() == course]['rollno'].tolist()
+        num_students = len(enrolled_students)
 
-# Room allocations storage
-room_allocations = []
+        # Allocate students to rooms based on capacity
+        remaining_students = num_students
+        student_index = 0
 
-# Excel data storage
-excel_data = []
+        for index, room in ip3.iterrows():
+            if remaining_students <= 0:
+                break  # All students have been assigned
 
-# Process each day
-for _, row in df2.iterrows():
-    date, day, morning_courses, evening_courses = row['date'], row['day'], row['morning_courses'], row['evening_courses']
+            room_no = room['Room No.']
+            available_capacity = room_capacities[room_no]  # Get current available capacity
 
-    # Function to allocate courses
-    def allocate_courses(courses, slot):
-        # Initialize current rooms with courses and their assigned students
-        current_rooms = {
-            room: {
-                'courses': defaultdict(list)  # Maps course_id to list of rollnos
-            }
-            for room in sorted_room_dict.keys()
-        }
-        for course_id in courses:
-            if course_id not in course_dict:
-                continue
-            roll_numbers = deque(course_dict[course_id])
-            for room, info in current_rooms.items():
-                room_capacity = sorted_room_dict[room]
-                max_per_course = room_capacity if dense else room_capacity // 2
-                max_total = room_capacity
-                # Calculate current total students in the room using builtins.sum
-                current_total = builtins.sum(len(students) for students in info['courses'].values())
-                available_space = max_total - current_total
-                # Calculate how many can be assigned from this course
-                current_course_count = len(info['courses'][course_id])
-                assignable = min(
-                    len(roll_numbers),
-                    max_per_course - current_course_count,
-                    available_space
-                )
-                for _ in range(assignable):
-                    if not roll_numbers:
-                        break
-                    student = roll_numbers.popleft()
-                    info['courses'][course_id].append(student)
-                if not roll_numbers:
-                    break  # All students for this course have been assigned
+            # Calculate effective capacity based on arrangement type
+            effective_capacity = available_capacity - buffer_size  # Apply buffer first
 
-        # Convert allocations to a simpler structure and collect Excel data
-        allocations = {}
-        for room, info in current_rooms.items():
-            for course_id, students in info['courses'].items():
-                if students:  # Exclude courses with zero assigned students
-                    allocations.setdefault(room, []).append({
-                        'course_id': course_id,
-                        'students': students
-                    })
-                    # Append to excel_data
-                    excel_data.append({
-                        'Date': date,
-                        'Day': day,
-                        'Course ID': course_id,
-                        'Room Number': room,
-                        'Count of Students Assigned': len(students),
-                        'Roll Numbers Assigned': ', '.join(map(str, students))
-                    })
-        return allocations
+            # Ensure effective capacity is not negative
+            if effective_capacity < 0:
+                effective_capacity = 0
 
-    # Allocate Morning Courses
-    morning_allocations = allocate_courses(morning_courses, 'Morning')
+            # Adjust for sparse arrangement
+            if arrangement_type == 'Sparse':
+                effective_capacity = effective_capacity // 2  # Max half for one course
 
-    # Allocate Evening Courses
-    evening_allocations = allocate_courses(evening_courses, 'Evening')
+            # Check if room has capacity
+            if effective_capacity > 0:
+                # Determine how many students can fit in this room
+                students_in_room = min(effective_capacity, remaining_students)
 
-    # Store the allocations
-    room_allocations.append({
-        'date': date,
-        'day': day,
-        'morning': morning_allocations,
-        'evening': evening_allocations
-    })
+                # Prepare output with additional details
+                assigned_students = enrolled_students[student_index:student_index + students_in_room]
+                output.append({
+                    'Date': date.strftime('%d-%m-%Y'),  # Format date to dd-mm-yyyy
+                    'Session': session,
+                    'Course Code': course,
+                    'Room No.': room_no,
+                    'Total Capacity': room['Exam Capacity'],
+                    'Students Present': students_in_room,
+                    'Available Capacity After Allocation': available_capacity - students_in_room,
+                    'Roll Numbers': ', '.join(map(str, assigned_students))
+                })
 
-# Create a DataFrame from the excel_data
-df_output = pd.DataFrame(excel_data, columns=[
-    'Date',
-    'Day',
-    'Course ID',
-    'Room Number',
-    'Count of Students Assigned',
-    'Roll Numbers Assigned'
-])
+                # Update remaining students and index
+                remaining_students -= students_in_room
+                student_index += students_in_room
 
-# Define the output Excel file name with timestamp to avoid overwriting
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-output_file = f'room_allocations_{timestamp}.xlsx'
+                # Update the remaining capacity of the room
+                room_capacities[room_no] -= students_in_room  # Reduce the available capacity
 
-# Write the DataFrame to an Excel file
-try:
-    df_output.to_excel(output_file, index=False)
-    print(f"\nRoom allocations have been successfully written to '{output_file}'.")
-except Exception as e:
-    print(f"Error writing to Excel file: {e}")
-    sys.exit(1)
+    return pd.DataFrame(output)
 
+def save_output(seating_arrangement, output_dir ):
+    # Ensure the output directory exists
+    os.makedirs(output_dir, exist_ok=True)
 
-proj_chat_tool()
+    csv_file = 'seating_arrangement.csv'
+    excel_file = 'seating_arrangement.xlsx'
+    
+    csv_path = os.path.join(output_dir, csv_file)
+    excel_path = os.path.join(output_dir, excel_file)
 
+    seating_arrangement.to_csv(csv_path, index=False)
+    seating_arrangement.to_excel(excel_path, index=False)
 
-#This shall be the last lines of the code.
+    print(f"Files saved at:\nCSV: {csv_path}\nExcel: {excel_path}")
+
+def create_attendance_sheets(seating_arrangement, ip1, ip4, output_dir):
+    # Group by Date, Session, and Room No.
+    grouped = seating_arrangement.groupby(['Date', 'Session', 'Room No.'])
+
+    for (date, session, room_no), group in grouped:
+        # Create a new Excel file for each combination of date, session, and room number
+        file_name = f"{date}_{session}_{room_no}.xlsx"  # Date already formatted
+        file_path = os.path.join(output_dir, file_name)
+
+        with pd.ExcelWriter(file_path) as writer:
+            for course_code, course_group in group.groupby('Course Code'):
+                # Get enrolled students for the course
+                enrolled_students = course_group['Roll Numbers'].values[0].split(', ')
+                student_names = ip4[ip4['Roll'].isin(enrolled_students)]['Name'].tolist()
+                enrolled_students_with_names = list(zip(enrolled_students, student_names))
+
+                # Create a DataFrame for the attendance sheet
+                attendance_df = pd.DataFrame(enrolled_students_with_names, columns=['Roll No', 'Name'])
+
+                # Add a 'Signature' column initialized with empty strings
+                attendance_df['Signature'] = [''] * len(attendance_df)
+
+                # Add empty rows for signatures
+                signature_rows = pd.DataFrame({
+                    'Roll No': [''] * 5,
+                    'Name': [' '] * 5,
+                    'Signature': [''] * 5  # Add empty Signature column
+                })
+                attendance_df = pd.concat([attendance_df, signature_rows], ignore_index=True)
+
+                # Write the attendance DataFrame to a new sheet in the Excel file
+                attendance_df.to_excel(writer, sheet_name=course_code, index=False)
+                
+def main():
+    ip1_file = r"C:\Classes IITP\Electives\Sem5_CS384 - Python Programming\Project\2201MM27_CS384_2024\proj1\ip_1.csv"
+    ip2_file = r"C:\Classes IITP\Electives\Sem5_CS384 - Python Programming\Project\2201MM27_CS384_2024\proj1\ip_2.csv"
+    ip3_file = r"C:\Classes IITP\Electives\Sem5_CS384 - Python Programming\Project\2201MM27_CS384_2024\proj1\ip_3.csv"
+    ip4_file = r"C:\Classes IITP\Electives\Sem5_CS384 - Python Programming\Project\2201MM27_CS384_2024\proj1\ip_4.csv"
+
+    output_dir_seating = r"C:\Classes IITP\Electives\Sem5_CS384 - Python Programming\Project\2201MM27_CS384_2024\proj1\output"
+    output_dir_attendance = r'C:\Classes IITP\Electives\Sem5_CS384 - Python Programming\Project\2201MM27_CS384_2024\proj1\output\Attendance'
+
+    ip1, ip2, ip3, ip4 = load_data(ip1_file, ip2_file, ip3_file, ip4_file)
+
+    if ip1 is None or ip2 is None or ip3 is None or ip4 is None:
+        print("Error loading data.")
+        return
+
+    original_room_capacities = {room['Room No.']: room['Exam Capacity'] for _, room in ip3.iterrows()}
+
+    buffer_size = int(input("Enter buffer size (0 for no buffer): "))
+    arrangement_type = input("Enter arrangement type (Dense or Sparse): ").title()
+    if arrangement_type == 'Sparse' and buffer_size > 0:
+        buffer_size = buffer_size - 1
+    
+    all_seating_arrangements = []
+
+    unique_dates = ip2['Date'].unique()
+    unique_sessions = ip2.columns[1:]
+
+    for date in unique_dates:
+        for session in unique_sessions:
+            seating_arrangement = arrange_seating(ip1, ip2, ip3, date, session, original_room_capacities, buffer_size, arrangement_type)
+            all_seating_arrangements.append(seating_arrangement)
+
+    complete_seating_arrangement = pd.concat(all_seating_arrangements, ignore_index=True)
+
+    save_output(complete_seating_arrangement, output_dir_seating)
+
+    create_attendance_sheets(complete_seating_arrangement, ip1, ip4, output_dir_attendance)
+
+    print(f"Seating arrangement and attendance sheets saved in directory: {output_dir_seating}, {output_dir_attendance}")
+
+if __name__ == "__main__":
+    main()
+
 end_time = datetime.now()
-print('Duration of Program Execution: {}'.format(end_time - start_time))
-
+print('Duration of Program Execution: {}'.format(end_time))
